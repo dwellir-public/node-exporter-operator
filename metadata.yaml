@@ -3,8 +3,7 @@ summary: >
     Export machine metrics to Prometheus.
 
 maintainers:
-    - OmniVector Solutions <admin@omnivector.solutions>
-    - Heitor de Bittencourt <heitor.bittencourt@omnivector.solutions>
+    - Dwellir AB <info@dwellir.com>
 
 description: >
     Prometheus exporter for hardware and OS metrics exposed by *NIX kernels,
