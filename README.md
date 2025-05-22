@@ -35,12 +35,12 @@ Run `tox -e ALL` to run unit + integration tests and verify linting.
 
 **We want to hear from you!**
 
-Email us @ [info@omnivector.solutions](mailto:info@omnivector.solutions)
+Email us @ [info@dwellir.com](mailto:info@dwellir.com)
 
 ## Bugs
 
 In the case things aren't working as expected, please
-[file a bug](https://github.com/omnivector-solutions/charm-prometheus-node-exporter/issues).
+[file a bug](https://github.com/dwellir-public/node-exporter-operator/issues).
 
 ## License
 
