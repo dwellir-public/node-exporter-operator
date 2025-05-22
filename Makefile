@@ -4,7 +4,7 @@ help:
 
 .PHONY: version
 version: ## Create/update version file
-	@git describe --dirty --tags --always > version
+	@git describe --dirty --always > version
 
 .PHONY: clean
 clean: ## Remove build dirs, temp files, and charms
