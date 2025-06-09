@@ -26,179 +26,156 @@ logger = logging.getLogger(__name__)
 
 
 class NodeExporterCharm(CharmBase):
-    """Charm the service."""
+    """Charm the Prometheus node-exporter service."""
 
     def __init__(self, *args):
-        """Initialize charm."""
         super().__init__(*args)
 
         self.prometheus = Prometheus(self, "prometheus")
 
-        # juju core hooks
+        # Juju hook observers
         self.framework.observe(self.on.install, self._on_install)
-        self.framework.observe(self.on.upgrade_charm, self._on_upgrade_charm)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
+        self.framework.observe(self.on.upgrade_charm, self._on_upgrade_charm)
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.on.stop, self._on_stop)
-
-    @property
-    def port(self):
-        """Return the port that node-exporter listens to."""
-        return self.model.config.get("listen-address").split(":")[1]
 
     def _on_install(self, event):
         logger.debug("## Installing charm")
         self.unit.status = MaintenanceStatus("Installing node-exporter")
-        self._set_charm_version()
-        _install_node_exporter(self.model.config.get("node-exporter-version"))
-
+        # One-time install: user/group, service unit, initial binary
+        _create_node_exporter_user_group()
+        _install_node_exporter_binary(self.model.config.get("node-exporter-version"))
+        _create_systemd_service_unit()
+        _render_sysconfig({"listen_address": self.model.config.get("listen-address")})
+        subprocess.call(["systemctl", "daemon-reload"])
+        subprocess.call(["systemctl", "enable", "node_exporter"])
         self.unit.status = ActiveStatus("node-exporter installed")
 
-    def _on_upgrade_charm(self, event):
-        """Perform upgrade operations."""
-        logger.debug("## Upgrading charm")
-        self.unit.status = MaintenanceStatus("Upgrading node-exporter")
-        self._set_charm_version()
-
-        self.unit.status = ActiveStatus("node-exporter upgraded")
-
     def _on_config_changed(self, event):
-        """Handle configuration updates."""
-        logger.debug("## Configuring charm")
+        logger.debug("## Config changed")
+        self.unit.status = MaintenanceStatus("Reconfiguring node-exporter")
 
-        params = dict()
-        params["listen_address"] = self.model.config.get("listen-address")
+        # Update workload version
+        new_version = self.model.config.get("node-exporter-version")
+        self.unit.set_workload_version(new_version or "unknown")
 
-        logger.debug(f"## Configuration options: {params}")
-        _render_sysconfig(params)
+        # Re-install binary if version changed
+        if _current_installed_version() != new_version:
+            logger.debug(f"## Installing new binary version {new_version}")
+            _install_node_exporter_binary(new_version)
+            subprocess.call(["systemctl", "restart", "node_exporter"])
+
+        # Update sysconfig and restart if listen address changed
+        _render_sysconfig({"listen_address": self.model.config.get("listen-address")})
         subprocess.call(["systemctl", "restart", "node_exporter"])
 
+        # Update relation data
         self.prometheus.set_host_port()
+        self.unit.status = ActiveStatus("node-exporter configured")
+
+    def _on_upgrade_charm(self, event):
+        logger.debug("## Upgrading charm revision")
+        # Re-use config_changed logic to reset version and config
+        self._on_config_changed(event)
 
     def _on_start(self, event):
-        logger.debug("## Starting daemon")
+        logger.debug("## Starting node-exporter")
         subprocess.call(["systemctl", "start", "node_exporter"])
         self.unit.status = ActiveStatus("node-exporter started")
 
     def _on_stop(self, event):
-        logger.debug("## Stopping daemon")
+        logger.debug("## Stopping node-exporter")
         subprocess.call(["systemctl", "stop", "node_exporter"])
         subprocess.call(["systemctl", "disable", "node_exporter"])
         _uninstall_node_exporter()
-
-    def _set_charm_version(self):
-        """Set the application version for Juju Status."""
-        self.unit.set_workload_version(Path("version").read_text().strip())
+        self.unit.status = ActiveStatus("node-exporter removed")
 
 
-def _install_node_exporter(version: str, arch: str = "amd64"):
-    """Download appropriate files and install node-exporter.
+def _install_node_exporter_binary(version: str, arch: str = "amd64"):
+    """Download and install only the node_exporter binary."""
+    logger.debug(f"## Downloading node_exporter v{version}")
+    url = (
+        f"https://github.com/prometheus/node_exporter/releases/download/"
+        f"v{version}/node_exporter-{version}.linux-{arch}.tar.gz"
+    )
+    output = Path(f"/tmp/node-exporter-{version}.tar.gz")
+    request.urlretrieve(url, output)
 
-    This function downloads the package, extracts it to /usr/bin/, create
-    node-exporter user and group, and creates the systemd service unit.
+    # Stop the service to avoid "Text file busy" on overwrite
+    subprocess.call(["systemctl", "stop", "node_exporter"])
+    logger.debug("## Stopped node_exporter service for binary update")
 
-    Args:
-        version: a string representing the version to install.
-        arch: the hardware architecture (e.g. amd64, armv7).
-    """
+    with tarfile.open(output, 'r:gz') as tar:
+        member = next(m for m in tar.getmembers() if m.name.endswith('/node_exporter'))
+        tar.extract(member, path=output.parent)
+        extracted = output.parent / member.name
+        dest = Path("/usr/bin/node_exporter")
+        tmp_dest = dest.with_suffix('.tmp')
+        shutil.copy2(extracted, tmp_dest)
+        # Atomically replace the binary
+        os.replace(tmp_dest, dest)
 
-    logger.debug(f"## Installing node_exporter {version}")
-
-    # Download file
-    url = f"https://github.com/prometheus/node_exporter/releases/download/v{version}/node_exporter-{version}.linux-{arch}.tar.gz"
-    logger.debug(f"## Downloading {url}")
-    output = Path("/tmp/node-exporter.tar.gz")
-    fname, headers = request.urlretrieve(url, output)
-
-    # Extract it
-    tar = tarfile.open(output, 'r')
-    with TemporaryDirectory(prefix="omni") as tmp_dir:
-        logger.debug(f"## Extracting {tar} to {tmp_dir}")
-        tar.extractall(path=tmp_dir)
-
-        logger.debug("## Installing node_exporter")
-        source = Path(tmp_dir) / f"node_exporter-{version}.linux-{arch}/node_exporter"
-        shutil.copy2(source, "/usr/bin/node_exporter")
-
-    # clean up
     output.unlink()
 
-    _create_node_exporter_user_group()
-    _create_systemd_service_unit()
-    _render_sysconfig({"listen_address": "0.0.0.0:9100"})
+    # Record installed version
+    version_file = Path("/var/lib/node_exporter/version")
+    version_file.parent.mkdir(parents=True, exist_ok=True)
+    version_file.write_text(version)
+
+
+def _current_installed_version() -> str:
+    """Return the currently installed node_exporter version from disk."""
+    version_file = Path("/var/lib/node_exporter/version")
+    if version_file.exists():
+        return version_file.read_text().strip()
+    return ""
 
 
 def _uninstall_node_exporter():
     logger.debug("## Uninstalling node-exporter")
-
-    # remove files and folders
-    Path("/usr/bin/node_exporter").unlink()
-    Path("/etc/systemd/system/node_exporter.service").unlink()
-    Path("/etc/sysconfig/node_exporter").unlink()
-    shutil.rmtree(Path("/var/lib/node_exporter/"))
-
-    # remove user and group
-    user = "node_exporter"
-    group = "node_exporter"
-    subprocess.call(["userdel", user])
-    subprocess.call(["groupdel", group])
+    Path("/usr/bin/node_exporter").unlink(missing_ok=True)
+    Path("/etc/systemd/system/node_exporter.service").unlink(missing_ok=True)
+    Path("/etc/sysconfig/node_exporter").unlink(missing_ok=True)
+    shutil.rmtree(Path("/var/lib/node_exporter"), ignore_errors=True)
+    subprocess.call(["userdel", "node_exporter"])
+    subprocess.call(["groupdel", "node_exporter"])
 
 
 def _create_node_exporter_user_group():
-    logger.debug("## Creating node_exporter group")
-    group = "node_exporter"
-    cmd = f"groupadd {group}"
-    subprocess.call(shlex.split(cmd))
-
-    logger.debug("## Creating node_exporter user")
-    user = "node_exporter"
-    cmd = f"useradd --system --no-create-home --gid {group} --shell /usr/sbin/nologin {user}"
-    subprocess.call(shlex.split(cmd))
+    """Create system user and group for node_exporter if not present."""
+    if subprocess.call(["getent", "group", "node_exporter"], stdout=subprocess.DEVNULL) != 0:
+        subprocess.call(["groupadd", "node_exporter"])
+    if subprocess.call(["id", "-u", "node_exporter"], stdout=subprocess.DEVNULL) != 0:
+        subprocess.call([
+            "useradd", "--system", "--no-create-home",
+            "--gid", "node_exporter", "--shell", "/usr/sbin/nologin", "node_exporter"
+        ])
 
 
 def _create_systemd_service_unit():
-    logger.debug("## Creating systemd service unit for node_exporter")
+    """Copy the systemd unit file from templates to the target directory."""
     charm_dir = os.path.dirname(os.path.abspath(__file__))
     template_dir = Path(charm_dir) / "templates"
-
-    service = "node_exporter.service"
-    shutil.copyfile(template_dir / service, f"/etc/systemd/system/{service}")
-
-    subprocess.call(["systemctl", "daemon-reload"])
-    subprocess.call(["systemctl", "enable", service])
+    src = template_dir / "node_exporter.service"
+    dst = Path("/etc/systemd/system/node_exporter.service")
+    if not dst.exists():
+        shutil.copyfile(src, dst)
 
 
 def _render_sysconfig(context: dict) -> None:
-    """Render the sysconfig file.
-
-    `context` should contain the following keys:
-        listen_address: a string specifiyng the address to listen to, e.g. 0.0.0.0:9100
-    """
-    logger.debug("## Writing sysconfig file")
-
+    """Render and write the /etc/sysconfig/node_exporter file."""
     charm_dir = os.path.dirname(os.path.abspath(__file__))
     template_dir = Path(charm_dir) / "templates"
-    template_file = "node_exporter.tmpl"
+    env = Environment(loader=FileSystemLoader(template_dir))
+    tmpl = env.get_template("node_exporter.tmpl")
 
-    sysconfig = Path("/etc/sysconfig/")
-    if not sysconfig.exists():
-        sysconfig.mkdir()
-
-    varlib = Path("/var/lib/node_exporter")
-    textfile_dir = varlib / "textfile_collector"
-    if not textfile_dir.exists():
-        textfile_dir.mkdir(parents=True)
-    shutil.chown(varlib, user="node_exporter", group="node_exporter")
-    shutil.chown(textfile_dir, user="node_exporter", group="node_exporter")
-
-    environment = Environment(loader=FileSystemLoader(template_dir))
-    template = environment.get_template(template_file)
-
-    target = sysconfig / "node_exporter"
-    if target.exists():
-        target.unlink()
-    target.write_text(template.render(context))
+    sysconfig_dir = Path("/etc/sysconfig")
+    sysconfig_dir.mkdir(exist_ok=True)
+    target = sysconfig_dir / "node_exporter"
+    target.write_text(tmpl.render(context))
 
 
 if __name__ == "__main__":
     main(NodeExporterCharm)
+
