@@ -191,4 +191,3 @@ def _render_sysconfig(context: dict) -> None:
 
 if __name__ == "__main__":
     main(NodeExporterCharm)
-
