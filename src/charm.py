@@ -77,8 +77,6 @@ class NodeExporterCharm(CharmBase):
 
     def _on_upgrade_charm(self, event):
         logger.debug("## Upgrading charm revision")
-        # Re-use config_changed logic to reset version and config
-        self._on_config_changed(event)
 
     def _on_start(self, event):
         logger.debug("## Starting node-exporter")
