@@ -7,6 +7,7 @@
 import logging
 import os
 import shlex
+import re
 import shutil
 import subprocess
 import tarfile
@@ -117,19 +118,33 @@ def _install_node_exporter_binary(version: str, arch: str = "amd64"):
         os.replace(tmp_dest, dest)
 
     output.unlink()
-
-    # Record installed version
-    version_file = Path("/var/lib/node_exporter/version")
-    version_file.parent.mkdir(parents=True, exist_ok=True)
-    version_file.write_text(version)
+    
+    # Make the binary executable
+    dest = Path("/usr/bin/node_exporter")
+    dest.chmod(0o755)
 
 
 def _current_installed_version() -> str:
-    """Return the currently installed node_exporter version from disk."""
-    version_file = Path("/var/lib/node_exporter/version")
-    if version_file.exists():
-        return version_file.read_text().strip()
-    return ""
+    """Return the currently installed node_exporter version by running the binary."""
+    binary = Path("/usr/bin/node_exporter")
+    if not binary.exists():
+        return ""
+    try:
+        result = subprocess.run(
+            [str(binary), "--version"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        # First line contains the version info
+        first_line = result.stdout.split('\n', 1)[0].strip()
+        # Extract version number (e.g., 1.9.1)
+        version_match = re.search(r'version (\d+\.\d+\.\d+)', first_line)
+        if version_match:
+            return version_match.group(1)
+        return first_line
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
 
 
 def _uninstall_node_exporter():
