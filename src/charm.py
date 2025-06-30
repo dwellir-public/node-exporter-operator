@@ -32,6 +32,8 @@ class NodeExporterCharm(CharmBase):
     def __init__(self, *args):
         super().__init__(*args)
 
+        self._update_host_and_port()
+
         self.prometheus = Prometheus(self, "prometheus")
 
         # Juju hook observers
@@ -66,6 +68,8 @@ class NodeExporterCharm(CharmBase):
             logger.debug(f"## Installing new binary version {new_version}")
             _install_node_exporter_binary(new_version)
             subprocess.call(["systemctl", "restart", "node_exporter"])
+        
+        self._update_host_and_port()
 
         # Update sysconfig and restart if listen address changed
         _render_sysconfig({"listen_address": self.model.config.get("listen-address")})
@@ -89,6 +93,10 @@ class NodeExporterCharm(CharmBase):
         subprocess.call(["systemctl", "disable", "node_exporter"])
         _uninstall_node_exporter()
         self.unit.status = ActiveStatus("node-exporter removed")
+
+    def _update_host_and_port(self):
+        self.address = self.model.config.get("listen-address").split(":")[0]
+        self.port = self.model.config.get("listen-address").split(":")[1]
 
 
 def _install_node_exporter_binary(version: str, arch: str = "amd64"):
