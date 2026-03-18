@@ -21,9 +21,12 @@ from ops.charm import CharmBase
 from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus
 
-from prometheus_node_exporter import Prometheus
+from prometheus_node_exporter import PrometheusProvider
 
 logger = logging.getLogger(__name__)
+
+SCRAPE_JOB_NAME = "node-exporter"
+SCRAPE_RELATION_NAME = "prometheus"
 
 
 class NodeExporterCharm(CharmBase):
@@ -34,7 +37,12 @@ class NodeExporterCharm(CharmBase):
 
         self._update_host_and_port()
 
-        self.prometheus = Prometheus(self, "prometheus")
+        self.prometheus = PrometheusProvider(
+            self,
+            relation_name=SCRAPE_RELATION_NAME,
+            path="/metrics",
+            job_name=SCRAPE_JOB_NAME,
+        )
 
         # Juju hook observers
         self.framework.observe(self.on.install, self._on_install)
@@ -75,8 +83,7 @@ class NodeExporterCharm(CharmBase):
         _render_sysconfig({"listen_address": self.model.config.get("listen-address")})
         subprocess.call(["systemctl", "restart", "node_exporter"])
 
-        # Update relation data
-        self.prometheus.set_host_port()
+        self.prometheus.set_job()
         self.unit.status = ActiveStatus("node-exporter configured")
 
     def _on_upgrade_charm(self, event):
@@ -95,8 +102,7 @@ class NodeExporterCharm(CharmBase):
         self.unit.status = ActiveStatus("node-exporter removed")
 
     def _update_host_and_port(self):
-        self.address = self.model.config.get("listen-address").split(":")[0]
-        self.port = self.model.config.get("listen-address").split(":")[1]
+        self.address, self.port = self.model.config.get("listen-address").rsplit(":", 1)
 
 
 def _install_node_exporter_binary(version: str, arch: str = "amd64"):

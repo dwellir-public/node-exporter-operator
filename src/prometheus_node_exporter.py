@@ -1,45 +1,111 @@
 #!/usr/bin/python3
-"""Prometheus."""
-import logging
+"""Prometheus manual jobs provider."""
+
+import hashlib
+import json
+import socket
 
 from ops.framework import Object
 
-logger = logging.getLogger(__name__)
 
+class PrometheusProvider(Object):
+    """Publish manual scrape jobs to prometheus2."""
 
-class Prometheus(Object):
-    """Prometheus."""
-
-    def __init__(self, charm, relation):
-        """Set the initial values."""
-        super().__init__(charm, relation)
+    def __init__(self, charm, relation_name, path, job_name, **job_data):
+        """Configure a prometheus-manual job publisher."""
+        super().__init__(charm, relation_name)
         self._charm = charm
-        self._relation_name = relation
+        self._relation_name = relation_name
+        self._job_name = job_name
+        self._path = path
+        self._job_data = job_data
+        self._request_id = hashlib.sha1(
+            f"{self.model.uuid}:{relation_name}:{self.model.unit.name}".encode()
+        ).hexdigest()[:8]
 
         self.framework.observe(
-            self._charm.on[self._relation_name].relation_created,
-            self._on_relation_created
+            charm.on[relation_name].relation_joined,
+            self._on_relation_joined,
         )
 
-    @property
-    def _relation(self):
-        return self.framework.model.get_relation(self._relation_name)
+    def _on_relation_joined(self, event):
+        """Publish the manual scrape job when related."""
+        self.set_job(event)
 
-    def _on_relation_created(self, event):
-        logger.debug("## Relation created with prometheus")
-        self.set_host_port()
+    def _principal_identity(self):
+        """Return the principal app/unit names from the juju-info relation."""
+        relation = self.model.get_relation("juju-info")
+        if not relation:
+            return None, None
 
-    def set_host_port(self):
-        """Set hostname and port in the relation data."""
-        logger.debug("## set_host_port")
+        principal_app = relation.app.name if relation.app else None
+        principal_unit = None
+        if relation.units:
+            principal_unit = sorted(relation.units, key=lambda unit: unit.name)[0].name
 
-        if self._relation:
-            relation_data = self._relation.data.get(self.model.unit)
-            if relation_data:
-                port = self._charm.port
-                host = relation_data['ingress-address']
-                logger.debug(f"## Setting host and port in prometheus {host}:{port}")
+        return principal_app, principal_unit
 
-                relation_data['hostname'] = host
-                relation_data['port'] = port
-                relation_data['metrics_path'] = "/metrics"
+    def _job(self, bind_address):
+        """Build the manual scrape job payload."""
+        _, port = self._charm.model.config.get("listen-address").rsplit(":", 1)
+        principal_app, principal_unit = self._principal_identity()
+        job_name_prefix = "-".join(
+            part
+            for part in (
+                self.model.name,
+                principal_app,
+                (principal_unit or self.model.unit.name).replace("/", "-"),
+                self._job_name,
+            )
+            if part
+        )
+        labels = {
+            "juju_model": self.model.name,
+            "juju_model_uuid": self.model.uuid,
+            "juju_application": self.model.app.name,
+            "juju_unit": self.model.unit.name,
+            "hostname": socket.gethostname(),
+        }
+        if principal_app:
+            labels["principal_application"] = principal_app
+        if principal_unit:
+            labels["principal_unit"] = principal_unit
+
+        # prometheus2 strips the last five dash-delimited segments when deduplicating
+        # manual jobs, so keep the meaningful identifier before this short suffix.
+        dedupe_suffix = "x-x-x-x"
+        return {
+            "job_name": f"{job_name_prefix}-{dedupe_suffix}",
+            "job_data": {
+                "honor_timestamps": True,
+                "scrape_interval": "15s",
+                "scrape_timeout": "15s",
+                "metrics_path": self._path,
+                "scheme": "http",
+                "follow_redirects": True,
+                "enable_http2": True,
+                "static_configs": [{
+                    "targets": [f"{bind_address}:{port}"],
+                    "labels": labels,
+                }],
+                **self._job_data,
+            },
+            "request_id": self._request_id,
+            "port": str(port),
+        }
+
+    def set_job(self, event=None):
+        """Publish the current scrape job to all related consumers."""
+        bind_address = getattr(
+            self.model.get_binding(self._relation_name).network,
+            "bind_address",
+            None,
+        )
+        if not bind_address:
+            if event:
+                event.defer()
+            return
+
+        job = json.dumps(self._job(str(bind_address)), sort_keys=True)
+        for relation in self.model.relations[self._relation_name]:
+            relation.data[self.model.unit][f"request_{self._request_id}"] = job

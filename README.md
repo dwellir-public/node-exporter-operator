@@ -13,12 +13,14 @@ $ juju deploy prometheus-node-exporter
 $ juju relate prometheus-node-exporter foo
 ```
 
-The charm can register it's scrape target with Prometheus via relation to the
-[Prometheus charm](https://charmhub.io/prometheus2):
+The charm exposes metrics to `prometheus2` over the `prometheus-manual`
+interface on the `prometheus` relation:
 
 ```bash
-$ juju relate prometheus-node-exporter prometheus2
+$ juju relate prometheus-node-exporter:prometheus prometheus2:manual-jobs
 ```
+This path supports an explicit job name instead of the legacy `remote-<hash>`
+format used by the plain `prometheus` interface.
 
 ## Developing
 
