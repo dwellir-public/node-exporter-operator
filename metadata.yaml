@@ -23,4 +23,4 @@ requires:
 
 provides:
   prometheus:
-    interface: prometheus
+    interface: prometheus-manual

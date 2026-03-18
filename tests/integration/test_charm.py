@@ -22,10 +22,9 @@ async def test_deploy(prometheus_node_exporter_charm, ops_test: OpsTest):
     )
     await ops_test.model.wait_for_idle(status='active')
 
-    # prom2
     await ops_test.model.deploy('prometheus2')
     await ops_test.model.add_relation(
-        'prometheus2:scrape',
+        'prometheus2:manual-jobs',
         'prometheus-node-exporter:prometheus'
     )
     await ops_test.model.wait_for_idle(status='active')

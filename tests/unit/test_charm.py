@@ -2,10 +2,12 @@
 
 """COS Proxy Charm Test."""
 
+import json
 import charm
 import subprocess
 import unittest
 from ops.testing import Harness
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -20,33 +22,58 @@ class COSProxyCharmTest(unittest.TestCase):
         self.harness.begin()
 
     def test_prometheus_relation(self):
-        """Check that the charm and prom are related."""
-        charm = self.harness.charm
-        prometheus = charm.prometheus
+        """Check that the charm publishes a prometheus-manual job."""
+        charm_instance = self.harness.charm
+        juju_info_rel_id = self.harness.add_relation("juju-info", "polkadot")
+        self.harness.add_relation_unit(juju_info_rel_id, "polkadot/0")
+        rel_id = self.harness.add_relation("prometheus", "prometheus")
+        self.harness.add_relation_unit(rel_id, "prometheus/1")
 
-        # relation created evt
-        with patch.object(prometheus, 'set_host_port') as mock:
-            rel_id = self.harness.add_relation(
-                prometheus._relation_name,
-                'prometheus')
-            key_values = {"ingress-address": "127.4.5.6"}
-            self.harness.add_relation_unit(rel_id, "prometheus/1")
-            self.harness.update_relation_data(
-                rel_id,
-                charm.unit.name,
-                key_values
-            )
+        with patch.object(
+            charm_instance.model,
+            "get_binding",
+            return_value=SimpleNamespace(
+                network=SimpleNamespace(bind_address="127.4.5.6")
+            ),
+        ), patch(
+            "prometheus_node_exporter.socket.gethostname",
+            return_value="ns1013399",
+        ):
+            charm_instance.prometheus.set_job()
 
-        # verify that it would have been called
-        mock.assert_called_once()
-        # call it
-        prometheus.set_host_port()
+        rel_data = self.harness.get_relation_data(rel_id, charm_instance.unit.name)
+        assert list(rel_data) == [f"request_{charm_instance.prometheus._request_key}"]
 
-        # verify the databag contents
-        rel_data = self.harness.get_relation_data(rel_id, charm.unit.name)
-        assert rel_data == {
-            'ingress-address': '127.4.5.6',
-            'hostname': '127.4.5.6',
-            'port': '9100',
-            'metrics_path': '/metrics'
+        job = json.loads(rel_data[f"request_{charm_instance.prometheus._request_key}"])
+        job_name_prefix = "-".join(filter(None, (
+            charm_instance.model.name,
+            "polkadot",
+            "polkadot-0",
+            "node-exporter",
+        )))
+        assert job == {
+            "job_name": f"{job_name_prefix}-x-x-x-x-{charm_instance.prometheus._request_id}",
+            "job_data": {
+                "enable_http2": True,
+                "follow_redirects": True,
+                "honor_timestamps": True,
+                "metrics_path": "/metrics",
+                "scheme": "http",
+                "scrape_interval": "15s",
+                "scrape_timeout": "15s",
+                "static_configs": [{
+                    "targets": ["127.4.5.6:9100"],
+                    "labels": {
+                        "hostname": "ns1013399",
+                        "juju_application": charm_instance.app.name,
+                        "juju_model": charm_instance.model.name,
+                        "juju_model_uuid": charm_instance.model.uuid,
+                        "juju_unit": charm_instance.unit.name,
+                        "principal_application": "polkadot",
+                        "principal_unit": "polkadot/0",
+                    },
+                }],
+            },
+            "port": "9100",
+            "request_id": charm_instance.prometheus._request_id,
         }
