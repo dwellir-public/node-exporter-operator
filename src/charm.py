@@ -20,6 +20,7 @@ from jinja2 import Environment, FileSystemLoader
 from ops.charm import CharmBase
 from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 
 from prometheus_node_exporter import PrometheusProvider
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 SCRAPE_JOB_NAME = "node-exporter"
 SCRAPE_RELATION_NAME = "prometheus"
+METRICS_ENDPOINT_RELATION_NAME = "metrics-endpoint"
 
 
 class NodeExporterCharm(CharmBase):
@@ -42,6 +44,18 @@ class NodeExporterCharm(CharmBase):
             relation_name=SCRAPE_RELATION_NAME,
             path="/metrics",
             job_name=SCRAPE_JOB_NAME,
+        )
+        self.metrics_endpoint = MetricsEndpointProvider(
+            self,
+            relation_name=METRICS_ENDPOINT_RELATION_NAME,
+            jobs=[
+                {
+                    "job_name": SCRAPE_JOB_NAME,
+                    "metrics_path": "/metrics",
+                    "static_configs": [{"targets": ["*:9100"]}],
+                }
+            ],
+            forward_alert_rules=False,
         )
 
         # Juju hook observers
