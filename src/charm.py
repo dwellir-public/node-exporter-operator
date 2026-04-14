@@ -88,8 +88,10 @@ class NodeExporterCharm(CharmBase):
         # Re-install binary if version changed
         if _current_installed_version() != new_version:
             logger.debug(f"## Installing new binary version {new_version}")
+            # Stop to avoid textfile missing error
+            subprocess.call(["systemctl", "stop", "node_exporter"])
             _install_node_exporter_binary(new_version)
-            subprocess.call(["systemctl", "restart", "node_exporter"])
+            subprocess.call(["systemctl", "start", "node_exporter"])
         
         self._update_host_and_port()
 

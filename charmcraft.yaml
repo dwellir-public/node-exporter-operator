@@ -1,11 +1,55 @@
+name: prometheus-node-exporter
 type: charm
+
+title: Prometheus Node Exporter
 
 platforms:
   ubuntu@20.04:amd64:
   ubuntu@22.04:amd64:
   ubuntu@24.04:amd64:
 
+summary: Export machine metrics to Prometheus.
+
+description: |
+  Prometheus exporter for hardware and OS metrics exposed by *NIX kernels,
+  written in Go with pluggable metric collectors.
+
+links:
+  contact:
+    - mailto:info@dwellir.com
+  issues:
+    - https://github.com/dwellir-public/node-exporter-operator/issues
+  source:
+    - https://github.com/dwellir-public/node-exporter-operator
+
+subordinate: true
+
+config:
+  options:
+    node-exporter-version:
+      type: string
+      default: "1.3.1"
+      description: |
+        The node-exporter version to install.
+    listen-address:
+      type: string
+      default: "0.0.0.0:9100"
+      description: The address to listen to.
+
+requires:
+  juju-info:
+    interface: juju-info
+    scope: container
+
+provides:
+  metrics-endpoint:
+    interface: prometheus_scrape
+  prometheus:
+    interface: prometheus-manual
+
 parts:
   charm:
-    build-packages: [git]
-    charm-python-packages: [setuptools]
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv
