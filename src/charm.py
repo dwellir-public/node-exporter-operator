@@ -6,13 +6,11 @@
 
 import logging
 import os
-import shlex
 import re
 import shutil
 import subprocess
 import tarfile
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from urllib import request
 
 from jinja2 import Environment, FileSystemLoader
@@ -35,6 +33,7 @@ class NodeExporterCharm(CharmBase):
     """Charm the Prometheus node-exporter service."""
 
     def __init__(self, *args):
+        """Initialize the charm and register lifecycle event handlers."""
         super().__init__(*args)
 
         self._update_host_and_port()
@@ -92,7 +91,7 @@ class NodeExporterCharm(CharmBase):
             subprocess.call(["systemctl", "stop", "node_exporter"])
             _install_node_exporter_binary(new_version)
             subprocess.call(["systemctl", "start", "node_exporter"])
-        
+
         self._update_host_and_port()
 
         # Update sysconfig and restart if listen address changed
@@ -146,7 +145,7 @@ def _install_node_exporter_binary(version: str, arch: str = "amd64"):
         os.replace(tmp_dest, dest)
 
     output.unlink()
-    
+
     # Make the binary executable
     dest = Path("/usr/bin/node_exporter")
     dest.chmod(0o755)
